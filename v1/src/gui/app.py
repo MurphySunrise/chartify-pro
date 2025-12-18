@@ -199,7 +199,7 @@ class ChartifyApp:
         def display_progress(p):
             self.control_panel.set_progress(90 + p * 0.1, f"Displaying... {p:.0f}%")
         
-        self.chart_viewer.display_figures(self.figures, progress_callback=display_progress)
+        self.chart_viewer.display_figures(self.figures, progress_callback=display_progress, stats=self.stats)
         
         self.control_panel.set_progress(100, f"Complete! {len(self.figures)} charts generated.")
         self.control_panel.enable_ppt_buttons(True)

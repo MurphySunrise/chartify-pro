@@ -223,7 +223,21 @@ class ChartViewer(ttk.Frame):
         self.chart_widgets.clear()
         
         columns = self._calculate_columns()
-        data_types = sorted(self.figures.keys())
+        
+        # Order data types: mismatch (p < 0.05) first, then match (p >= 0.05)
+        if hasattr(self, 'stats') and self.stats:
+            mismatch = []
+            match = []
+            for data_type in self.figures.keys():
+                if data_type in self.stats and self.stats[data_type].has_significant_results():
+                    mismatch.append(data_type)
+                else:
+                    match.append(data_type)
+            mismatch.sort()
+            match.sort()
+            data_types = mismatch + match
+        else:
+            data_types = sorted(self.figures.keys())
         
         for i, data_type in enumerate(data_types):
             row = i // columns
@@ -263,17 +277,40 @@ class ChartViewer(ttk.Frame):
     def display_figures(
         self,
         figures: Dict[str, Figure],
-        progress_callback: Optional[Callable[[float], None]] = None
+        progress_callback: Optional[Callable[[float], None]] = None,
+        stats: Optional[Dict] = None
     ):
-        """Display figures in dynamic grid layout."""
+        """Display figures in dynamic grid layout.
+        
+        Args:
+            figures: Dictionary mapping data_type -> Figure
+            progress_callback: Optional callback for progress updates
+            stats: Optional stats dictionary for ordering (mismatch first)
+        """
         self.clear()
         self.figures = figures
+        self.stats = stats  # Store for relayout
         
         if not figures:
             return
         
         total = len(figures)
-        data_types = sorted(figures.keys())
+        
+        # Order data types: mismatch (p < 0.05) first, then match (p >= 0.05)
+        if stats:
+            mismatch = []
+            match = []
+            for data_type in figures.keys():
+                if data_type in stats and stats[data_type].has_significant_results():
+                    mismatch.append(data_type)
+                else:
+                    match.append(data_type)
+            mismatch.sort()
+            match.sort()
+            data_types = mismatch + match
+        else:
+            data_types = sorted(figures.keys())
+        
         columns = self._calculate_columns()
         
         for i, data_type in enumerate(data_types):

@@ -167,20 +167,22 @@ class PPTGenerator:
         """
         self.create_presentation(template_path)
         
-        # Separate significant and non-significant
-        non_significant = []
-        significant = []
+        # Separate mismatch (p<0.05, significant) and match (p>=0.05, non-significant)
+        # p < 0.05 means mismatch (significant difference from control)
+        # p >= 0.05 means match (no significant difference from control)
+        mismatch = []  # significant results (p < 0.05)
+        match = []     # non-significant results (p >= 0.05)
         
         for data_type, stat in stats.items():
             if data_type in figures:
                 if stat.has_significant_results():
-                    significant.append(data_type)
+                    mismatch.append(data_type)  # p < 0.05 -> mismatch
                 else:
-                    non_significant.append(data_type)
+                    match.append(data_type)     # p >= 0.05 -> match
         
         # Sort each list
-        non_significant.sort()
-        significant.sort()
+        mismatch.sort()
+        match.sort()
         
         total_charts = len(figures)
         charts_processed = 0
@@ -201,13 +203,13 @@ class PPTGenerator:
                     if progress_callback:
                         progress_callback(charts_processed / total_charts * 100)
         
-        # Add non-significant charts first
-        if non_significant:
-            add_charts_batch(non_significant, "metrics mismatch")
+        # Add mismatch charts first (p < 0.05, significant difference)
+        if mismatch:
+            add_charts_batch(mismatch, "metrics mismatch")
         
-        # Then significant charts
-        if significant:
-            add_charts_batch(significant, "metrics match")
+        # Then match charts (p >= 0.05, no significant difference)
+        if match:
+            add_charts_batch(match, "metrics match")
         
         # Generate output path
         csv_file = Path(csv_path)
