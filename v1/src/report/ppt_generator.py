@@ -230,3 +230,92 @@ class PPTGenerator:
         import matplotlib.pyplot as plt
         for fig in figures.values():
             plt.close(fig)
+    
+    def generate_report_from_bytes(
+        self,
+        png_bytes_dict: Dict[str, bytes],
+        stats: Dict[str, 'DataTypeStats'],
+        csv_path: str,
+        template_path: Optional[str] = None,
+        progress_callback: Optional[callable] = None
+    ) -> str:
+        """
+        Generate PPT report from PNG bytes (faster for multiprocess).
+        
+        Args:
+            png_bytes_dict: Dictionary mapping data_type -> PNG bytes
+            stats: Dictionary mapping data_type -> DataTypeStats
+            csv_path: Path to source CSV file (for output naming)
+            template_path: Optional template file path
+            progress_callback: Optional progress callback
+            
+        Returns:
+            Path to generated PPT file
+        """
+        self.create_presentation(template_path)
+        
+        # Separate mismatch and match
+        mismatch = []
+        match = []
+        
+        for data_type, stat in stats.items():
+            if data_type in png_bytes_dict:
+                if stat.has_significant_results():
+                    mismatch.append(data_type)
+                else:
+                    match.append(data_type)
+        
+        mismatch.sort()
+        match.sort()
+        
+        total_charts = len(png_bytes_dict)
+        charts_processed = 0
+        
+        def add_charts_batch(data_types: List[str], title: str):
+            nonlocal charts_processed
+            
+            for i in range(0, len(data_types), self.CHARTS_PER_PAGE):
+                batch = data_types[i:i + self.CHARTS_PER_PAGE]
+                slide = self.add_slide_with_title(title)
+                
+                for j, data_type in enumerate(batch):
+                    png_bytes = png_bytes_dict[data_type]
+                    self.add_chart_bytes_to_slide(slide, png_bytes, j)
+                    charts_processed += 1
+                    
+                    if progress_callback:
+                        progress_callback(charts_processed / total_charts * 100)
+        
+        if mismatch:
+            add_charts_batch(mismatch, "metrics mismatch")
+        
+        if match:
+            add_charts_batch(match, "metrics match")
+        
+        csv_file = Path(csv_path)
+        output_path = csv_file.parent / f"{csv_file.stem}_statistic_report.pptx"
+        
+        self.prs.save(str(output_path))
+        
+        return str(output_path)
+    
+    def add_chart_bytes_to_slide(
+        self,
+        slide,
+        png_bytes: bytes,
+        index: int
+    ) -> None:
+        """
+        Add a chart from PNG bytes to slide at specified position.
+        
+        Args:
+            slide: PowerPoint slide object
+            png_bytes: PNG image bytes
+            index: Position index (0-5)
+        """
+        chart_width, chart_height = self._calculate_chart_size()
+        left, top = self._get_chart_position(index)
+        
+        # Add picture directly from bytes
+        buf = BytesIO(png_bytes)
+        slide.shapes.add_picture(buf, left, top, width=chart_width, height=chart_height)

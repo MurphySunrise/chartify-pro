@@ -120,7 +120,8 @@ class StatsCalculator:
         df: pl.DataFrame,
         group_name: str,
         control_values: Optional[np.ndarray] = None,
-        control_std: Optional[float] = None
+        control_std: Optional[float] = None,
+        control_mean: Optional[float] = None
     ) -> GroupStats:
         """
         Compute statistics for a single group.
@@ -138,12 +139,13 @@ class StatsCalculator:
         desc_stats = StatsCalculator.compute_descriptive_stats(values)
         
         # Compute comparison with control if available
+        # Calculate standardized mean difference: (group_mean - control_mean) / control_std
         std_diff = None
         p_value = None
         is_significant = False
         
-        if control_std is not None and not np.isnan(desc_stats['std']):
-            std_diff = desc_stats['std'] - control_std
+        if control_std is not None and control_mean is not None and control_std > 0:
+            std_diff = (desc_stats['mean'] - control_mean) / control_std
         
         if control_values is not None and len(control_values) > 0:
             p_value, is_significant = StatsCalculator.perform_ttest(values, control_values)
@@ -199,7 +201,7 @@ class StatsCalculator:
             
             group_df = df.filter(pl.col("group").cast(pl.Utf8) == group_name)
             gs = StatsCalculator.compute_group_stats(
-                group_df, group_name, control_values, control_std
+                group_df, group_name, control_values, control_std, control_stats.mean
             )
             group_stats[group_name] = gs
         

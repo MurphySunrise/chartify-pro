@@ -4,6 +4,7 @@ Chartify Pro - CSV Data Analysis & PPT Report Generator
 """
 
 import sys
+import multiprocessing
 from src.gui.app import ChartifyApp
 
 
@@ -14,4 +15,5 @@ def main():
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()  # Required for Windows exe packaging
     main()

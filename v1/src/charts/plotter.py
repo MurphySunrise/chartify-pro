@@ -11,11 +11,72 @@ import matplotlib.patches as mpatches
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 import numpy as np
+from scipy import stats
 from typing import Dict, List, Optional, Tuple, Any
 import warnings
 from collections import defaultdict
+from io import BytesIO
 
 from ..stats.calculator import DataTypeStats, GroupStats
+
+
+# Standalone function for multiprocessing - must be at module level
+def create_figure_multiprocess(
+    data_type: str,
+    data_by_group: Dict[str, np.ndarray],
+    stats_dict: Dict[str, Any],
+    control_group: str,
+    ordered_groups: List[str]
+) -> Tuple[str, bytes, bool]:
+    """
+    Create chart figure in subprocess. Returns PNG bytes.
+    
+    This function is designed to be pickled and run in ProcessPoolExecutor.
+    Uses only serializable data types (no dataclass objects).
+    
+    Args:
+        data_type: Name of the data type
+        data_by_group: Dict mapping group name to numpy array of values
+        stats_dict: Dict with group stats (serialized from DataTypeStats)
+        control_group: Name of control group
+        ordered_groups: List of group names in order
+        
+    Returns:
+        Tuple of (data_type, png_bytes, has_significant)
+    """
+    plotter = ChartPlotter()
+    
+    # Reconstruct minimal stats for plotting
+    class SimpleStats:
+        def __init__(self, stats_dict, control_group, ordered_groups):
+            self.control_group = control_group
+            self._ordered_groups = ordered_groups
+            self.group_stats = {}
+            for name, gs_dict in stats_dict.items():
+                self.group_stats[name] = type('GroupStats', (), gs_dict)()
+        
+        def get_ordered_groups(self):
+            return self._ordered_groups
+    
+    simple_stats = SimpleStats(stats_dict, control_group, ordered_groups)
+    
+    # Create figure
+    fig = plotter.create_combined_figure(data_type, data_by_group, simple_stats)
+    
+    # Convert to PNG bytes
+    buf = BytesIO()
+    fig.savefig(buf, format='png', dpi=plotter.FIGURE_DPI, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    buf.seek(0)
+    png_bytes = buf.getvalue()
+    
+    # Check significance
+    has_significant = any(
+        stats_dict.get(name, {}).get('is_significant', False)
+        for name in ordered_groups if name != control_group
+    )
+    
+    return (data_type, png_bytes, has_significant)
 
 
 # Color palette - control group is always blue
@@ -179,10 +240,13 @@ class ChartPlotter:
                     line.set_linewidth(1.5)
             
             # Draw scatter points with beeswarm effect
-            # Sample if too many points
+            # Only sample if more than 50000 points per group
             plot_values = values
-            if len(values) > 500:
-                sample_idx = np.random.choice(len(values), 500, replace=False)
+            MAX_DISPLAY_POINTS = 10000  # Maximum points to display per group
+            SAMPLING_THRESHOLD = 50000  # Only sample if above this
+            
+            if len(values) > SAMPLING_THRESHOLD:
+                sample_idx = np.random.choice(len(values), MAX_DISPLAY_POINTS, replace=False)
                 plot_values = values[sample_idx]
             
             x_positions = self.beeswarm_positions(plot_values, i, width=0.35)
@@ -221,8 +285,9 @@ class ChartPlotter:
         y_limits: Optional[Tuple[float, float]] = None
     ) -> None:
         """
-        Plot Q-Q plot (quantile plot) with scatter points.
-        Full range from 0% to 100% to show all values including extremes.
+        Plot Normal Quantile (Q-Q) plot using scipy.stats.probplot.
+        Shows how data compares to normal distribution.
+        Includes min/max markers at quantile 0 and 1 to match boxplot range.
         
         Args:
             ax: Matplotlib axes
@@ -231,8 +296,9 @@ class ChartPlotter:
             ordered_groups: Groups in display order
             y_limits: Optional Y-axis limits to match boxplot
         """
-        # Full quantile range from 0 to 1 (100 points)
-        quantiles = np.linspace(0, 1, 101)
+        # Sampling thresholds (same as boxplot)
+        MAX_DISPLAY_POINTS = 10000
+        SAMPLING_THRESHOLD = 50000
         
         non_control_idx = 0
         for group in ordered_groups:
@@ -244,31 +310,30 @@ class ChartPlotter:
             if group != control_group:
                 non_control_idx += 1
             
-            # Calculate quantile values (0% = min, 100% = max)
-            q_values = np.percentile(values, quantiles * 100)
+            # Sample if too many points (same logic as boxplot)
+            plot_values = values
+            if len(values) > SAMPLING_THRESHOLD:
+                sample_idx = np.random.choice(len(values), MAX_DISPLAY_POINTS, replace=False)
+                plot_values = values[sample_idx]
             
-            # Plot line
-            ax.plot(quantiles, q_values, color=color, linewidth=1.5, label=group, alpha=0.8)
+            # Use scipy.stats.probplot to get theoretical quantiles
+            (osm, osr), _ = stats.probplot(plot_values, dist="norm")
             
-            # Add scatter points including extremes
-            # 0%, 5%, 10%, ..., 95%, 100%
-            scatter_quantiles = np.linspace(0, 1, 21)
-            scatter_values = np.percentile(values, scatter_quantiles * 100)
-            ax.scatter(
-                scatter_quantiles,
-                scatter_values,
-                c=color,
-                s=20,
-                alpha=0.8,
-                edgecolors='white',
-                linewidths=0.5,
-                zorder=3
-            )
+            # Plot all points with line
+            ax.plot(osm, osr, marker='o', linestyle='-', label=group, 
+                   color=color, markersize=3, alpha=0.7, linewidth=1)
         
-        ax.set_xlabel('Quantile')
+        ax.set_xlabel('Normal Quantile')
         ax.set_ylabel('Value')
-        ax.set_title('Quantile Plot')
-        ax.set_xlim(0, 1)
+        ax.set_title('Normal Quantile Plot')
+        
+        # Set x-axis ticks with probability labels (like v1.5)
+        quantile_labels = [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99]
+        xticks = [stats.norm.ppf(q) for q in quantile_labels]
+        ax.set_xticks(xticks)
+        ax.set_xticklabels([f'{q:.0%}' if q >= 0.1 else f'{q:.0%}' for q in quantile_labels], 
+                          rotation=45, ha='right', fontsize=8)
+        ax.grid(axis='x', linestyle='--', color='gray', linewidth=0.5, alpha=0.5)
         
         if y_limits:
             ax.set_ylim(y_limits)
@@ -288,7 +353,7 @@ class ChartPlotter:
         ax.axis('off')
         
         # Prepare table data
-        headers = ['Group', 'Count', 'Mean', 'Median', 'Std', 'P95', 'P05', 'Std Diff', 'P-value']
+        headers = ['Group', 'Count', 'Mean', 'Median', 'Std', 'P95', 'P05', '(Mean-Ctrl)/σ', 'P-value']
         
         cell_data = []
         cell_colors = []

@@ -81,7 +81,10 @@ class ChartViewer(ttk.Frame):
     
     def _on_resize(self, event=None):
         """Handle window resize - recalculate grid columns."""
-        if not self.figures or self.zoomed_chart:
+        has_figures = hasattr(self, 'figures') and self.figures
+        has_png_data = hasattr(self, 'png_data') and self.png_data
+        
+        if (not has_figures and not has_png_data) or self.zoomed_chart:
             return
         
         new_width = self.winfo_width()
@@ -111,6 +114,8 @@ class ChartViewer(ttk.Frame):
     def clear(self):
         """Clear all displayed charts."""
         self.figures.clear()
+        if hasattr(self, 'png_data'):
+            self.png_data.clear()
         self.photo_images.clear()
         self.full_images.clear()
         self.chart_widgets.clear()
@@ -144,6 +149,20 @@ class ChartViewer(ttk.Frame):
         
         return ImageTk.PhotoImage(pil_image)
     
+    def _bytes_to_photoimage(
+        self,
+        png_bytes: bytes,
+        width: int,
+        height: int
+    ) -> ImageTk.PhotoImage:
+        """
+        Convert PNG bytes directly to Tkinter PhotoImage.
+        Much faster than going through Figure object.
+        """
+        pil_image = Image.open(BytesIO(png_bytes))
+        pil_image = pil_image.resize((width, height), Image.Resampling.LANCZOS)
+        return ImageTk.PhotoImage(pil_image)
+    
     def _on_chart_click(self, data_type: str):
         """Handle chart click - toggle zoom mode."""
         if self.zoomed_chart == data_type:
@@ -154,8 +173,13 @@ class ChartViewer(ttk.Frame):
     def _zoom_to_chart(self, data_type: str):
         """
         Zoom to display a single chart using overlay (no layout change).
+        Supports both figures dict and png_data dict.
         """
-        if data_type not in self.figures:
+        # Check if we have the data (either figures or png_data)
+        has_figure = hasattr(self, 'figures') and data_type in self.figures
+        has_png = hasattr(self, 'png_data') and data_type in self.png_data
+        
+        if not has_figure and not has_png:
             return
         
         # Close any existing overlay
@@ -176,8 +200,13 @@ class ChartViewer(ttk.Frame):
         # Get or create cached image
         cache_key = f"{data_type}_{width}_{height}"
         if cache_key not in self.full_images:
-            fig = self.figures[data_type]
-            photo = self._figure_to_photoimage(fig, width, height)
+            if has_png:
+                # Use PNG bytes directly (faster)
+                photo = self._bytes_to_photoimage(self.png_data[data_type], width, height)
+            else:
+                # Fallback to figure
+                fig = self.figures[data_type]
+                photo = self._figure_to_photoimage(fig, width, height)
             self.full_images[cache_key] = photo
         
         photo = self.full_images[cache_key]
@@ -215,8 +244,15 @@ class ChartViewer(ttk.Frame):
     
     def _relayout_charts(self):
         """Relayout charts based on current window size."""
-        if not self.figures or self.zoomed_chart:
+        # Check which data source we have
+        has_figures = hasattr(self, 'figures') and self.figures
+        has_png_data = hasattr(self, 'png_data') and self.png_data
+        
+        if (not has_figures and not has_png_data) or self.zoomed_chart:
             return
+        
+        # Determine which data source to use
+        data_source = self.png_data if has_png_data else self.figures
         
         for widget in self.inner_frame.winfo_children():
             widget.destroy()
@@ -228,7 +264,7 @@ class ChartViewer(ttk.Frame):
         if hasattr(self, 'stats') and self.stats:
             mismatch = []
             match = []
-            for data_type in self.figures.keys():
+            for data_type in data_source.keys():
                 if data_type in self.stats and self.stats[data_type].has_significant_results():
                     mismatch.append(data_type)
                 else:
@@ -237,7 +273,7 @@ class ChartViewer(ttk.Frame):
             match.sort()
             data_types = mismatch + match
         else:
-            data_types = sorted(self.figures.keys())
+            data_types = sorted(data_source.keys())
         
         for i, data_type in enumerate(data_types):
             row = i // columns
@@ -258,6 +294,9 @@ class ChartViewer(ttk.Frame):
             
             if data_type in self.photo_images:
                 photo = self.photo_images[data_type]
+            elif has_png_data:
+                photo = self._bytes_to_photoimage(self.png_data[data_type], self.CHART_MIN_WIDTH, self.CHART_MIN_HEIGHT)
+                self.photo_images[data_type] = photo
             else:
                 fig = self.figures[data_type]
                 photo = self._figure_to_photoimage(fig, self.CHART_MIN_WIDTH, self.CHART_MIN_HEIGHT)
@@ -355,3 +394,86 @@ class ChartViewer(ttk.Frame):
     def get_figures(self) -> Dict[str, Figure]:
         """Get all displayed figures."""
         return self.figures
+    
+    def display_png_bytes(
+        self,
+        png_data: Dict[str, bytes],
+        progress_callback: Optional[Callable[[float], None]] = None,
+        stats: Optional[Dict] = None
+    ):
+        """Display charts from PNG bytes directly (faster for multiprocess).
+        
+        Args:
+            png_data: Dictionary mapping data_type -> PNG bytes
+            progress_callback: Optional callback for progress updates
+            stats: Optional stats dictionary for ordering (mismatch first)
+        """
+        self.clear()
+        self.png_data = png_data  # Store PNG data
+        self.stats = stats
+        
+        if not png_data:
+            return
+        
+        total = len(png_data)
+        
+        # Order data types: mismatch first
+        if stats:
+            mismatch = []
+            match = []
+            for data_type in png_data.keys():
+                if data_type in stats and stats[data_type].has_significant_results():
+                    mismatch.append(data_type)
+                else:
+                    match.append(data_type)
+            mismatch.sort()
+            match.sort()
+            data_types = mismatch + match
+        else:
+            data_types = sorted(png_data.keys())
+        
+        columns = self._calculate_columns()
+        
+        for i, data_type in enumerate(data_types):
+            png_bytes = png_data[data_type]
+            
+            row = i // columns
+            col = i % columns
+            
+            chart_frame = ttk.Frame(self.inner_frame, padding=5)
+            chart_frame.grid(row=row, column=col, padx=5, pady=5, sticky=NSEW)
+            
+            title_label = ttk.Label(
+                chart_frame, 
+                text=data_type, 
+                font=('Helvetica', 10, 'bold'),
+                anchor=CENTER,
+                cursor='hand2'
+            )
+            title_label.pack(fill=X, pady=(0, 5))
+            title_label.bind('<Button-1>', lambda e, dt=data_type: self._on_chart_click(dt))
+            
+            # Use bytes directly - much faster!
+            photo = self._bytes_to_photoimage(png_bytes, self.CHART_MIN_WIDTH, self.CHART_MIN_HEIGHT)
+            self.photo_images[data_type] = photo
+            
+            img_label = ttk.Label(chart_frame, image=photo, cursor='hand2')
+            img_label.pack(fill=BOTH, expand=True)
+            img_label.bind('<Button-1>', lambda e, dt=data_type: self._on_chart_click(dt))
+            
+            self.chart_widgets[data_type] = img_label
+            
+            if progress_callback:
+                progress_callback((i + 1) / total * 100)
+            
+            # Update every 10 charts to avoid too many UI updates
+            if i % 10 == 0:
+                self.update_idletasks()
+        
+        self.update_idletasks()
+        
+        for col in range(columns):
+            self.inner_frame.columnconfigure(col, weight=1)
+        
+        self._on_frame_configure()
+        self._last_width = self.winfo_width()

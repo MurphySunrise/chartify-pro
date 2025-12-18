@@ -79,7 +79,7 @@ class ControlPanel(ttk.Frame):
         ttk.Entry(self, textvariable=self.ppt_var, state='readonly', width=30).grid(
             row=row, column=0, sticky=EW, padx=(0, 5)
         )
-        ttk.Button(self, text="Browse", command=self._browse_ppt, bootstyle="secondary-outline").grid(
+        ttk.Button(self, text="Browse", command=self._browse_ppt, bootstyle="primary-outline").grid(
             row=row, column=1, sticky=E
         )
         row += 1
@@ -156,10 +156,11 @@ class ControlPanel(ttk.Frame):
         self.data_cols_frame = ttk.Frame(self)
         self.data_cols_frame.grid(row=row, column=1, sticky=EW, pady=(5, 0))
         
+        # Use EXTENDED mode for Shift+Click range selection
         self.data_cols_listbox = tk.Listbox(
             self.data_cols_frame, 
-            selectmode=tk.MULTIPLE, 
-            height=5, 
+            selectmode=tk.EXTENDED,  # Supports Shift+Click and Ctrl+Click
+            height=6, 
             exportselection=False
         )
         self.data_cols_listbox.pack(side=LEFT, fill=BOTH, expand=True)
@@ -167,6 +168,25 @@ class ControlPanel(ttk.Frame):
         scrollbar = ttk.Scrollbar(self.data_cols_frame, orient=VERTICAL, command=self.data_cols_listbox.yview)
         scrollbar.pack(side=RIGHT, fill=Y)
         self.data_cols_listbox.config(yscrollcommand=scrollbar.set)
+        row += 1
+        
+        # Select All / Clear buttons
+        self.select_btns_frame = ttk.Frame(self)
+        self.select_btns_frame.grid(row=row, column=1, sticky=W, pady=(2, 0))
+        ttk.Button(
+            self.select_btns_frame, 
+            text="Select All", 
+            command=self._select_all_cols,
+            bootstyle="primary-outline",
+            width=10
+        ).pack(side=LEFT, padx=(0, 5))
+        ttk.Button(
+            self.select_btns_frame, 
+            text="Clear", 
+            command=self._clear_selection,
+            bootstyle="secondary-outline",
+            width=10
+        ).pack(side=LEFT)
         row += 1
         
         # Separator
@@ -270,6 +290,7 @@ class ControlPanel(ttk.Frame):
             # Hide multi mode widgets
             self.data_cols_label.grid_remove()
             self.data_cols_frame.grid_remove()
+            self.select_btns_frame.grid_remove()
         else:
             # Hide single mode widgets
             self.data_type_label.grid_remove()
@@ -279,11 +300,20 @@ class ControlPanel(ttk.Frame):
             # Show multi mode widgets
             self.data_cols_label.grid()
             self.data_cols_frame.grid()
+            self.select_btns_frame.grid()
     
     def _on_group_col_change(self, event=None):
         """Handle group column selection change."""
         # This will be called from outside to update control group options
         pass
+    
+    def _select_all_cols(self):
+        """Select all items in data columns listbox."""
+        self.data_cols_listbox.select_set(0, tk.END)
+    
+    def _clear_selection(self):
+        """Clear selection in data columns listbox."""
+        self.data_cols_listbox.selection_clear(0, tk.END)
     
     def _on_calculate(self):
         """Handle calculate button click."""

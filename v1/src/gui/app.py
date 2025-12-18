@@ -13,16 +13,21 @@ import sys
 import os
 from pathlib import Path
 from typing import Dict, Optional
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from io import BytesIO
 
 from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 import polars as pl
+import numpy as np
 
 from .control_panel import ControlPanel
 from .chart_viewer import ChartViewer
 from ..data.loader import DataLoader
 from ..data.processor import DataProcessor
 from ..stats.calculator import StatsCalculator, DataTypeStats
-from ..charts.plotter import ChartPlotter
+from ..charts.plotter import ChartPlotter, create_figure_multiprocess
 from ..report.ppt_generator import PPTGenerator
 
 
@@ -54,6 +59,7 @@ class ChartifyApp:
         self.processed_df: Optional[pl.DataFrame] = None
         self.stats: Dict[str, DataTypeStats] = {}
         self.figures: Dict[str, Figure] = {}
+        self.png_bytes: Dict[str, bytes] = {}  # Store PNG bytes for fast display
         self.ppt_path: Optional[str] = None
         
         self._create_layout()
@@ -158,14 +164,16 @@ class ChartifyApp:
                 progress_callback=stats_progress
             )
             
-            self.control_panel.set_progress(50, "Generating charts...")
+            self.control_panel.set_progress(50, "Generating charts (multiprocess)...")
             
-            # Generate figures
+            # Generate figures using multiprocessing
             self.figures = {}
             data_types = list(self.stats.keys())
             total = len(data_types)
             
-            for i, data_type in enumerate(data_types):
+            # Prepare data for multiprocessing
+            tasks = []
+            for data_type in data_types:
                 # Get data for this type
                 data_by_group = {}
                 for group in self.stats[data_type].get_ordered_groups():
@@ -174,16 +182,55 @@ class ChartifyApp:
                     )
                     data_by_group[group] = values
                 
-                # Create figure
-                fig = self.plotter.create_combined_figure(
+                # Convert stats to serializable dict
+                stats_dict = {}
+                for name, gs in self.stats[data_type].group_stats.items():
+                    stats_dict[name] = {
+                        'group_name': gs.group_name,
+                        'count': gs.count,
+                        'mean': gs.mean,
+                        'median': gs.median,
+                        'std': gs.std,
+                        'variance': gs.variance,
+                        'p95': gs.p95,
+                        'p05': gs.p05,
+                        'std_diff_from_control': gs.std_diff_from_control,
+                        'p_value': gs.p_value,
+                        'is_significant': gs.is_significant
+                    }
+                
+                tasks.append((
                     data_type,
                     data_by_group,
-                    self.stats[data_type]
-                )
-                self.figures[data_type] = fig
+                    stats_dict,
+                    self.stats[data_type].control_group,
+                    self.stats[data_type].get_ordered_groups()
+                ))
+            
+            # Execute in parallel using ProcessPoolExecutor
+            completed = 0
+            self.png_bytes = {}  # Store PNG bytes
+            with ProcessPoolExecutor() as executor:
+                futures = {
+                    executor.submit(create_figure_multiprocess, *task): task[0]
+                    for task in tasks
+                }
                 
-                progress = 50 + (i + 1) / total * 40
-                self.control_panel.set_progress(progress, f"Generating charts... {i+1}/{total}")
+                for future in as_completed(futures):
+                    data_type = futures[future]
+                    try:
+                        dt, png_bytes, has_significant = future.result()
+                        
+                        # Store PNG bytes directly - no Figure conversion needed!
+                        self.png_bytes[dt] = png_bytes
+                        
+                        completed += 1
+                        progress = 50 + completed / total * 40
+                        self.control_panel.set_progress(progress, f"Generating charts... {completed}/{total}")
+                        
+                    except Exception as e:
+                        print(f"Error processing {data_type}: {e}")
+                        completed += 1
             
             self.control_panel.set_progress(90, "Displaying charts...")
             
@@ -199,14 +246,15 @@ class ChartifyApp:
         def display_progress(p):
             self.control_panel.set_progress(90 + p * 0.1, f"Displaying... {p:.0f}%")
         
-        self.chart_viewer.display_figures(self.figures, progress_callback=display_progress, stats=self.stats)
+        # Use fast PNG bytes display
+        self.chart_viewer.display_png_bytes(self.png_bytes, progress_callback=display_progress, stats=self.stats)
         
-        self.control_panel.set_progress(100, f"Complete! {len(self.figures)} charts generated.")
+        self.control_panel.set_progress(100, f"Complete! {len(self.png_bytes)} charts generated.")
         self.control_panel.enable_ppt_buttons(True)
     
     def _on_generate_ppt(self):
         """Handle generate PPT button click."""
-        if not self.figures or not self.stats:
+        if not self.png_bytes or not self.stats:
             messagebox.showwarning("Warning", "Please run calculation first.")
             return
         
@@ -225,8 +273,8 @@ class ChartifyApp:
             def ppt_progress(p):
                 self.control_panel.set_progress(p, f"Generating PPT... {p:.0f}%")
             
-            self.ppt_path = self.ppt_generator.generate_report(
-                self.figures,
+            self.ppt_path = self.ppt_generator.generate_report_from_bytes(
+                self.png_bytes,
                 self.stats,
                 settings['csv_path'],
                 settings['ppt_template_path'],
