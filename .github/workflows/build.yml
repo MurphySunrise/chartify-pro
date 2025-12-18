@@ -9,9 +9,6 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: v1
     steps:
       - uses: actions/checkout@v4
       
@@ -34,13 +31,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ChartifyPro-Windows
-          path: v1/dist/ChartifyPro.exe
+          path: dist/ChartifyPro.exe
 
   build-macos:
     runs-on: macos-latest
-    defaults:
-      run:
-        working-directory: v1
     steps:
       - uses: actions/checkout@v4
       
@@ -63,4 +57,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ChartifyPro-macOS
-          path: v1/dist/ChartifyPro*
+          path: dist/ChartifyPro*
