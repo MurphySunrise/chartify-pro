@@ -1,0 +1,6 @@
+polars>=0.20.0
+matplotlib>=3.7.0
+python-pptx>=0.6.21
+scipy>=1.11.0
+ttkbootstrap>=1.10.0
+numpy>=1.24.0
